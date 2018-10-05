@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from logging_pkg.logging import debug_print,message_print
+from logging_pkg.logging import message_print, debug_print
 import os
 import math
 import matplotlib.pyplot as plt
@@ -23,7 +23,6 @@ class VideoToShotConverter:
         self.videoContainer = cv2.VideoCapture(self.pathToVideo)
         self.videoFPS = self.videoContainer.get(cv2.CAP_PROP_FPS)
 
-        debug_print("VIDEO FPS:"+str(self.videoFPS))
 
         self.videoFrameWidth = int(self.videoContainer.get(3))
         self.videoFrameHeight = int(self.videoContainer.get(4))
@@ -70,15 +69,6 @@ class VideoToShotConverter:
         if(np.sum(arrayOpticalFlowMagnitudes)>0):
 
             if(difference>=self.stdMultiplierForCheck*stdOpticalFlow):
-
-                debug_print("SHOT BOUNDARY DETECTED")
-                debug_print("Array:"+str(arrayOpticalFlowMagnitudes))
-                debug_print("Median:"+str(medianOpticalFlow))
-                debug_print("Std:"+str(stdOpticalFlow))
-                debug_print("Value:"+str(arrayOpticalFlowMagnitudes[self.indexToCheck-1]))
-                debug_print("Difference:" + str(difference))
-                debug_print("MulXOpticalFlow:"+str(self.stdMultiplierForCheck*stdOpticalFlow))
-
                 return True
             else:
                 return False
@@ -86,8 +76,6 @@ class VideoToShotConverter:
             return False
 
     def saveShotFromFramesForCurrentShot(self):
-
-        debug_print("SHOT LENGTH: "+str(len(self.listOfFramesForCurrentShot)))
 
         shotFileName = os.path.join(self.pathToShots,'shot_'+str(self.shotId)+'.mp4')
 
@@ -105,8 +93,6 @@ class VideoToShotConverter:
         return True
 
     def saveShotFromListOfCurrentFrames(self):
-
-        debug_print("SHOT LENGTH: " + str(len(self.listOfCurrentFrames)))
 
         shotFileName = os.path.join(self.pathToShots, 'shot_' + str(self.shotId) + '.mp4')
 
@@ -140,16 +126,26 @@ class VideoToShotConverter:
 
         return True
 
+    def prepFramesForOpticalFlows(self,f1,f2):
+
+        f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
+        f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
+
+        f1 = cv2.resize(f1,fx=0.5,fy=0.5,dsize=0)
+        f2 = cv2.resize(f2, fx=0.5, fy=0.5,dsize=0)
+
+        f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+        f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+
+        return f1,f2
+
+
     def populateListOfOpticalFlows(self):
 
         self.listOpticalFlowMagnitudes=[]
         for i in range(0, len(self.listOfCurrentFrames) - 1):
-            f1 = self.listOfCurrentFrames[i]
-            f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
 
-            f2 = self.listOfCurrentFrames[i + 1]
-            f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
-
+            f1,f2 = self.prepFramesForOpticalFlows(self.listOfCurrentFrames[i],self.listOfCurrentFrames[i + 1])
             flow = cv2.calcOpticalFlowFarneback(prev=f1, next=f2, **self.farnBackParams)
 
             mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
@@ -160,12 +156,7 @@ class VideoToShotConverter:
     def updateOpticalFlows(self):
 
         self.listOpticalFlowMagnitudes.pop(0)
-        f1 = self.listOfCurrentFrames[-2]
-        f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
-
-        f2 = self.listOfCurrentFrames[-1]
-        f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
-
+        f1,f2 =  self.prepFramesForOpticalFlows(self.listOfCurrentFrames[-2],self.listOfCurrentFrames[-1])
         flow = cv2.calcOpticalFlowFarneback(prev=f1, next=f2, **self.farnBackParams)
 
         mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
