@@ -131,14 +131,13 @@ class VideoToShotConverter:
         f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
         f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
 
-        f1 = cv2.resize(f1,fx=0.5,fy=0.5,dsize=0)
-        f2 = cv2.resize(f2, fx=0.5, fy=0.5,dsize=0)
+        f1 = cv2.resize(f1, (0,0), fx=0.5, fy=0.5)
+        f2 = cv2.resize(f2, (0,0), fx=0.5, fy=0.5)
 
         f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
         f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
 
         return f1,f2
-
 
     def populateListOfOpticalFlows(self):
 
