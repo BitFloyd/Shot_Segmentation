@@ -22,7 +22,8 @@ class VideoToShotConverter:
         self.pathToShots = pathToShots
         self.videoContainer = cv2.VideoCapture(self.pathToVideo)
         self.videoFPS = self.videoContainer.get(cv2.CAP_PROP_FPS)
-
+        message_print("VIDEO FPS:"+str(self.videoFPS))
+        self.numFrames = int(self.videoContainer.get(cv2.CAP_PROP_FRAME_COUNT))
 
         self.videoFrameWidth = int(self.videoContainer.get(3))
         self.videoFrameHeight = int(self.videoContainer.get(4))
@@ -48,8 +49,7 @@ class VideoToShotConverter:
         self.logFile = os.path.join(self.pathToShots,'logfile.txt')
         self.stdMultiplierForCheck = 3.0
 
-        self.farnBackParams = {'flow':None, 'pyr_scale':0.5, 'levels':3, 'winsize':9,'iterations':1, 'poly_n':7, 'poly_sigma':1.2,'flags': 0}
-
+        self.farnBackParams = {'flow':None, 'pyr_scale':0.5, 'levels':3, 'winsize':15,'iterations':3, 'poly_n':5, 'poly_sigma':1.2,'flags': 0}
 
     def writeOpticalFlowDetailsToFile(self,flow):
 
@@ -131,37 +131,44 @@ class VideoToShotConverter:
         f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
         f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
 
-        f1 = cv2.resize(f1, (0,0), fx=0.5, fy=0.5)
-        f2 = cv2.resize(f2, (0,0), fx=0.5, fy=0.5)
+        f1 = cv2.resize(f1, (0,0), fx=0.25, fy=0.25)
+        f2 = cv2.resize(f2, (0,0), fx=0.25, fy=0.25)
 
         f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
         f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
 
         return f1,f2
 
+    def getOpticalFlow(self,f1,f2):
+
+        f1,f2 = self.prepFramesForOpticalFlows(f1,f2)
+        flow = cv2.calcOpticalFlowFarneback(prev=f1, next=f2, **self.farnBackParams)
+
+        mag,_ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+
+        mag = cv2.normalize(mag,alpha=0,beta=1.0,norm_type=cv2.NORM_MINMAX)
+
+        mag = np.mean(mag)
+
+        return mag
+
     def populateListOfOpticalFlows(self):
 
         self.listOpticalFlowMagnitudes=[]
         for i in range(0, len(self.listOfCurrentFrames) - 1):
 
-            f1,f2 = self.prepFramesForOpticalFlows(self.listOfCurrentFrames[i],self.listOfCurrentFrames[i + 1])
-            flow = cv2.calcOpticalFlowFarneback(prev=f1, next=f2, **self.farnBackParams)
+            mag = self.getOpticalFlow(self.listOfCurrentFrames[i],self.listOfCurrentFrames[i + 1])
 
-            mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-
-            self.listOpticalFlowMagnitudes.append(np.mean(mag))
-            self.writeOpticalFlowDetailsToFile(np.mean(mag))
+            self.listOpticalFlowMagnitudes.append(mag)
+            self.writeOpticalFlowDetailsToFile(mag)
 
     def updateOpticalFlows(self):
 
         self.listOpticalFlowMagnitudes.pop(0)
-        f1,f2 =  self.prepFramesForOpticalFlows(self.listOfCurrentFrames[-2],self.listOfCurrentFrames[-1])
-        flow = cv2.calcOpticalFlowFarneback(prev=f1, next=f2, **self.farnBackParams)
 
-        mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-
-        self.listOpticalFlowMagnitudes.append(np.mean(mag))
-        self.writeOpticalFlowDetailsToFile(np.mean(mag))
+        mag = self.getOpticalFlow(self.listOfCurrentFrames[-2],self.listOfCurrentFrames[-1])
+        self.listOpticalFlowMagnitudes.append(mag)
+        self.writeOpticalFlowDetailsToFile(mag)
 
         return True
 
@@ -209,6 +216,7 @@ class VideoToShotConverter:
         self.populateInitialListOfCurrentFrames()
         self.populateListOfOpticalFlows()
 
+        i = 0
 
         while (not self.videoFinished):
 
@@ -220,6 +228,8 @@ class VideoToShotConverter:
             else:
                 self.performNoShotBoundaryRoutine()
 
+            print str(i)+'/'+str(self.numFrames)
+            i+=1
 
         return True
 
