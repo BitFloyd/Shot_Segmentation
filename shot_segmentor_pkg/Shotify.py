@@ -21,18 +21,19 @@ class VideoToShotConverter:
         self.pathToVideo = pathToVideo
         self.pathToShots = pathToShots
         self.videoContainer = cv2.VideoCapture(self.pathToVideo)
-        self.videoFPS = self.videoContainer.get(cv2.CAP_PROP_FPS)
+        self.videoFPS = int(self.videoContainer.get(cv2.CAP_PROP_FPS))
         message_print("VIDEO FPS:"+str(self.videoFPS))
         self.numFrames = int(self.videoContainer.get(cv2.CAP_PROP_FRAME_COUNT))
 
         self.videoFrameWidth = int(self.videoContainer.get(3))
         self.videoFrameHeight = int(self.videoContainer.get(4))
+        self.videoFPSRatioForWindow = 2.0
 
         if(slidingWindowLength==None):
-            if((self.videoFPS)%2==0):
-                self.slidingWindowLength = int(self.videoFPS+1)
+            if(int(self.videoFPS*self.videoFPSRatioForWindow)%2==0):
+                self.slidingWindowLength = int(self.videoFPS*self.videoFPSRatioForWindow)+1
             else:
-                self.slidingWindowLength = int(self.videoFPS)
+                self.slidingWindowLength = int(self.videoFPS*self.videoFPSRatioForWindow)
         else:
             self.slidingWindowLength = slidingWindowLength
 
@@ -47,7 +48,7 @@ class VideoToShotConverter:
         self.videoFinished = False
         self.shotId = 0
         self.logFile = os.path.join(self.pathToShots,'logfile.txt')
-        self.stdMultiplierForCheck = 3.0
+        self.stdMultiplierForCheck = 4.0
 
         self.farnBackParams = {'flow':None, 'pyr_scale':0.5, 'levels':3, 'winsize':15,'iterations':3, 'poly_n':5, 'poly_sigma':1.2,'flags': 0}
 
@@ -145,8 +146,8 @@ class VideoToShotConverter:
         flow = cv2.calcOpticalFlowFarneback(prev=f1, next=f2, **self.farnBackParams)
 
         mag,_ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-
-        mag = cv2.normalize(mag,alpha=0,beta=1.0,norm_type=cv2.NORM_MINMAX)
+        mag = cv2.medianBlur(mag,ksize=3)
+        # mag = cv2.normalize(mag,dst=None,alpha=0,beta=1.0,norm_type=cv2.NORM_MINMAX)
 
         mag = np.mean(mag)
 

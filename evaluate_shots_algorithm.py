@@ -10,7 +10,7 @@ parse_dict = af.parse_arguments(parameters)
 pathToVideo = parse_dict['video']
 pathToShots = parse_dict['target_folder']
 
-vtsc = VideoToShotConverter(pathToVideo,pathToShots,slidingWindowLength=7)
+vtsc = VideoToShotConverter(pathToVideo,pathToShots,slidingWindowLength=None)
 
 
 vtsc.segmentVideoToShots()
