@@ -4,7 +4,7 @@ from logging_pkg.logging import message_print, debug_print
 import os
 import math
 import matplotlib.pyplot as plt
-
+import sys
 
 
 class VideoLengthAssertionError(Exception):
@@ -17,9 +17,13 @@ class VideoToShotConverter:
 
     def __init__(self,pathToVideo,pathToShots,slidingWindowLength=None):
 
-
         self.pathToVideo = pathToVideo
         self.pathToShots = pathToShots
+        self.pathToAnalysis = os.path.join(pathToShots,'Analysis')
+
+        if(not os.path.exists(self.pathToAnalysis)):
+            os.mkdir(self.pathToAnalysis)
+
         self.videoContainer = cv2.VideoCapture(self.pathToVideo)
         self.videoFPS = int(self.videoContainer.get(cv2.CAP_PROP_FPS))
         message_print("VIDEO FPS:"+str(self.videoFPS))
@@ -27,7 +31,7 @@ class VideoToShotConverter:
 
         self.videoFrameWidth = int(self.videoContainer.get(3))
         self.videoFrameHeight = int(self.videoContainer.get(4))
-        self.videoFPSRatioForWindow = 2.0
+        self.videoFPSRatioForWindow = 1.0
 
         if(slidingWindowLength==None):
             if(int(self.videoFPS*self.videoFPSRatioForWindow)%2==0):
@@ -47,10 +51,13 @@ class VideoToShotConverter:
         self.listOfFramesForCurrentShot = []
         self.videoFinished = False
         self.shotId = 0
-        self.logFile = os.path.join(self.pathToShots,'logfile.txt')
-        self.stdMultiplierForCheck = 4.0
+        self.logFile = os.path.join(self.pathToAnalysis,'logfile.txt')
+        self.stdMultiplierForCheck = 3.0
 
-        self.farnBackParams = {'flow':None, 'pyr_scale':0.5, 'levels':3, 'winsize':15,'iterations':3, 'poly_n':5, 'poly_sigma':1.2,'flags': 0}
+        self.farnBackParams = {'flow':None, 'pyr_scale':0.5, 'levels':3, 'winsize':45,'iterations':3, 'poly_n':35, 'poly_sigma':1.2,'flags': 0}
+        self.frameResizeParams ={'fx':1,'fy':1}
+
+        self.ofplotter = PlotOpticalFlow()
 
     def writeOpticalFlowDetailsToFile(self,flow):
 
@@ -132,8 +139,8 @@ class VideoToShotConverter:
         f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
         f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
 
-        f1 = cv2.resize(f1, (0,0), fx=0.25, fy=0.25)
-        f2 = cv2.resize(f2, (0,0), fx=0.25, fy=0.25)
+        f1 = cv2.resize(f1, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
+        f2 = cv2.resize(f2, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
 
         f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
         f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
@@ -147,9 +154,7 @@ class VideoToShotConverter:
 
         mag,_ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
         mag = cv2.medianBlur(mag,ksize=3)
-        # mag = cv2.normalize(mag,dst=None,alpha=0,beta=1.0,norm_type=cv2.NORM_MINMAX)
-
-        mag = np.mean(mag)
+        mag = np.median(mag)
 
         return mag
 
@@ -234,6 +239,13 @@ class VideoToShotConverter:
 
         return True
 
+    def plotOpticalFlowSamplingWindow(self):
+
+        plotterObj = PlotOpticalFlowSamplingWindow(self.pathToVideo, self.pathToShots,self.farnBackParams,self.frameResizeParams)
+        plotterObj.createSampling()
+
+        return True
+
     def __del__(self):
         self.videoContainer.release()
 
@@ -244,7 +256,7 @@ class PlotShotSegmentationParams:
     def __init__(self,vtscObject):
 
         self.logFile=vtscObject.logFile
-        self.pathToPlot = vtscObject.pathToShots
+        self.pathToPlot = vtscObject.pathToAnalysis
         self.slidingWindowLength = vtscObject.slidingWindowLength
         self.indexToCheck = vtscObject.indexToCheck
         self.stdMultiplierForCheck = vtscObject.stdMultiplierForCheck
@@ -378,3 +390,135 @@ class PlotShotSegmentationParams:
         plt.close()
 
         return True
+
+
+class PlotOpticalFlow:
+
+    def __init__(self):
+        self.name = 'PlotOpticalFlow'
+
+    def drawFlow(self,img, flow, step=16):
+
+        h, w = img.shape[:2]
+        y, x = np.mgrid[step / 2:h:step, step / 2:w:step].reshape(2, -1).astype(int)
+        fx, fy = flow[y, x].T
+        lines = np.vstack([x, y, x + fx, y + fy]).T.reshape(-1, 2, 2)
+        lines = np.int32(lines + 0.5)
+        vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        cv2.polylines(vis, lines, 0, (0, 255, 0))
+        for (x1, y1), (x2, y2) in lines:
+            cv2.circle(vis, (x1, y1), 1, (0, 255, 0), -1)
+
+        return vis
+
+    def drawFlowHsv(self,flow):
+
+        h, w = flow.shape[:2]
+        fx, fy = flow[:, :, 0], flow[:, :, 1]
+        ang = np.arctan2(fy, fx) + np.pi
+        v = np.sqrt(fx * fx + fy * fy)
+        hsv = np.zeros((h, w, 3), np.uint8)
+        hsv[..., 0] = ang * (180 / np.pi / 2)
+        hsv[..., 1] = 255
+        hsv[..., 2] = np.minimum(v * 4, 255)
+        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+        return bgr
+
+
+class PlotOpticalFlowSamplingWindow:
+
+    def __init__(self,pathToVideo, pathToShots,farnBackParams,frameResizeParams):
+
+        self.pathToVideo = pathToVideo
+        self.pathToShots = pathToShots
+        self.farnBackParams = farnBackParams
+        self.frameResizeParams = frameResizeParams
+        self.frame = self.getFrame()
+        self.frameCount = 0
+
+    def getFrame(self):
+
+        videoContainer = cv2.VideoCapture(self.pathToVideo)
+
+        # numFrame = int(videoContainer.get(cv2.CAP_PROP_FRAME_COUNT)/10)
+        _,frame = videoContainer.read()
+        videoContainer.release()
+
+        frame = cv2.resize(frame, (0, 0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
+
+        return frame
+
+    def returnPyramid(self):
+
+        pyramidScale = self.farnBackParams['pyr_scale']
+        levels = self.farnBackParams['levels']
+
+        pyramidImages = []
+        pyramidImages.append(self.frame)
+
+        frameResized = self.frame.copy()
+        debug_print(frameResized.shape)
+
+        for i in range(0,levels-1):
+            frameResized = cv2.resize(frameResized,(0,0),fx=pyramidScale,fy=pyramidScale)
+            pyramidImages.append(frameResized)
+
+        return pyramidImages
+
+    def slidingWindow(self,image, stepSize, windowSize):
+        # slide a window across the image
+        for y in range(0, image.shape[0], stepSize):
+            for x in range(0, image.shape[1], stepSize):
+                # yield the current window
+                yield (x, y, image[y:y + windowSize[1], x:x + windowSize[0]])
+
+    def openVideoStream(self):
+
+        shotFileName = os.path.join(self.pathToShots, 'slidingWindow.mp4')
+
+        self.videoWriter = cv2.VideoWriter(shotFileName, cv2.VideoWriter_fourcc('F', 'M', 'P', '4'),
+                              12, (self.frame.shape[1], self.frame.shape[0]))
+
+        return True
+
+    def writeFrameToVideo(self,pyramidFrame):
+
+        zeroImage = np.zeros(shape=self.frame.shape)
+        zeroImage[0:pyramidFrame.shape[0],0:pyramidFrame.shape[1],:] = pyramidFrame
+        zeroImage = np.uint8(zeroImage)
+
+        self.videoWriter.write(zeroImage)
+        self.frameCount+=1
+
+        return True
+
+    def closeVideoStream(self):
+        self.videoWriter.release()
+
+        return True
+
+    def createSampling(self):
+
+        winW = self.farnBackParams['winsize']
+        winH = self.farnBackParams['winsize']
+
+        self.openVideoStream()
+
+        pyramidImages = self.returnPyramid()
+        for image in pyramidImages:
+            for (x, y, window) in self.slidingWindow(image, stepSize=winH, windowSize=(winH,winW)):
+                # if the window does not meet our desired window size, ignore it
+                if window.shape[0] != winH or window.shape[1] != winW:
+                    continue
+
+                clone = image.copy()
+                cv2.rectangle(clone, (x, y), (x + winW, y + winH), (0, 255, 0), 2)
+
+                self.writeFrameToVideo(clone)
+
+
+
+        self.closeVideoStream()
+
+        message_print("THE FRAME COUNT OF THE VIDEO:"+str(self.frameCount))

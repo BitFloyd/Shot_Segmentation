@@ -12,7 +12,7 @@ pathToShots = parse_dict['target_folder']
 
 vtsc = VideoToShotConverter(pathToVideo,pathToShots,slidingWindowLength=None)
 
-
+vtsc.plotOpticalFlowSamplingWindow()
 vtsc.segmentVideoToShots()
 
 plotter = PlotShotSegmentationParams(vtsc)
