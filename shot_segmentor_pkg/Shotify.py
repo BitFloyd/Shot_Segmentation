@@ -4,7 +4,6 @@ from logging_pkg.logging import message_print, debug_print
 import os
 import math
 import matplotlib.pyplot as plt
-import sys
 
 
 class VideoLengthAssertionError(Exception):
@@ -20,9 +19,12 @@ class VideoToShotConverter:
         self.pathToVideo = pathToVideo
         self.pathToShots = pathToShots
         self.pathToAnalysis = os.path.join(pathToShots,'Analysis')
+        self.pathToShotBoundaries = os.path.join(pathToShots,'ShotBoundaries')
 
         if(not os.path.exists(self.pathToAnalysis)):
             os.mkdir(self.pathToAnalysis)
+        if (not os.path.exists(self.pathToShotBoundaries)):
+            os.mkdir(self.pathToShotBoundaries)
 
         self.videoContainer = cv2.VideoCapture(self.pathToVideo)
         self.videoFPS = int(self.videoContainer.get(cv2.CAP_PROP_FPS))
@@ -52,10 +54,11 @@ class VideoToShotConverter:
         self.videoFinished = False
         self.shotId = 0
         self.logFile = os.path.join(self.pathToAnalysis,'logfile.txt')
-        self.stdMultiplierForCheck = 3.0
+        self.logFileShotBoundary = os.path.join(self.pathToAnalysis,'shotBoundarylog.txt')
+        self.stdMultiplierForCheck = 3.5
 
-        self.farnBackParams = {'flow':None, 'pyr_scale':0.5, 'levels':3, 'winsize':45,'iterations':3, 'poly_n':35, 'poly_sigma':1.2,'flags': 0}
-        self.frameResizeParams ={'fx':1,'fy':1}
+        self.farnBackParams = {'flow':None, 'pyr_scale':0.75, 'levels':5, 'winsize':15,'iterations':3, 'poly_n':7, 'poly_sigma':1.2,'flags': 0}
+        self.frameResizeParams ={'fx':1.0,'fy':1.0}
 
         self.ofplotter = PlotOpticalFlow()
 
@@ -66,17 +69,39 @@ class VideoToShotConverter:
 
         return True
 
+    def writeShotBoundaryDetailsToFile(self,arrayOpticalFlowMagnitudes,medianOpticalFlow,stdOpticalFlow,difference):
+
+        arrayOpticalFlowMagnitudes = np.around(arrayOpticalFlowMagnitudes,decimals=2)
+        medianOpticalFlow = np.around(medianOpticalFlow,decimals=2)
+        stdOpticalFlow = np.around(stdOpticalFlow,decimals=2)
+        difference = np.around(difference,decimals=2)
+
+        with open(self.logFileShotBoundary,'a+') as f:
+            f.write('-------------------------------------'+'\n')
+            f.write('Shot_ID:'+str(self.shotId)+'\n')
+            f.write('ArrayOF:'+str(arrayOpticalFlowMagnitudes)+'\n')
+            f.write('OFofSBFrame:'+str(arrayOpticalFlowMagnitudes[self.indexToCheck])+'\n')
+            f.write('MedianOF:'+str(medianOpticalFlow)+'\n')
+            f.write('StdOF:'+str(stdOpticalFlow)+'\n')
+            f.write('Difference:'+str(difference)+'\n')
+            f.write('Threshold:'+str(self.stdMultiplierForCheck*stdOpticalFlow)+'\n')
+            f.write('-------------------------------------' + '\n')
+
+        return  True
+
     def checkShotBoundaryInCurrentFrames(self):
 
         arrayOpticalFlowMagnitudes=np.array(self.listOpticalFlowMagnitudes)
         medianOpticalFlow = np.median(arrayOpticalFlowMagnitudes)
         stdOpticalFlow = np.std(arrayOpticalFlowMagnitudes)
 
-        difference = np.abs(arrayOpticalFlowMagnitudes[self.indexToCheck-1]-medianOpticalFlow)
+        difference = np.abs(arrayOpticalFlowMagnitudes[self.indexToCheck]-medianOpticalFlow)
+        threshold = self.stdMultiplierForCheck*stdOpticalFlow
 
-        if(np.sum(arrayOpticalFlowMagnitudes)>0):
+        if(np.sum(arrayOpticalFlowMagnitudes)>0 and arrayOpticalFlowMagnitudes[self.indexToCheck]>0):
 
-            if(difference>=self.stdMultiplierForCheck*stdOpticalFlow):
+            if(difference>=threshold and threshold>=1.0):
+                self.writeShotBoundaryDetailsToFile(arrayOpticalFlowMagnitudes,medianOpticalFlow,stdOpticalFlow,difference)
                 return True
             else:
                 return False
@@ -178,7 +203,37 @@ class VideoToShotConverter:
 
         return True
 
+    def saveShotBoundaryOpticalFlows(self):
+
+        fig, axes = plt.subplots(3, 2)
+        plt.axis('off')
+        f1 = self.listOfCurrentFrames[self.indexToCheck]
+        f2 = self.listOfCurrentFrames[self.indexToCheck+1]
+
+        axes[0, 0].imshow(cv2.cvtColor(f1, cv2.COLOR_BGR2RGB))
+        axes[0, 0].axis('off')
+        axes[0, 1].imshow(cv2.cvtColor(f2, cv2.COLOR_BGR2RGB))
+        axes[0, 1].axis('off')
+
+        f1,f2 = self.prepFramesForOpticalFlows(f1,f2)
+        flow = cv2.calcOpticalFlowFarneback(prev=f1, next=f2, **self.farnBackParams)
+        axes[1, 0].imshow(self.ofplotter.drawFlow(f1,flow,self.farnBackParams['winsize']))
+        axes[1, 0].axis('off')
+
+        axes[1, 1].imshow(self.ofplotter.drawFlowHsv(flow))
+        axes[1, 1].axis('off')
+
+        self.ofplotter.plotFlowHist(flow,axes[2,0])
+
+        filename = os.path.join(self.pathToShotBoundaries,str(self.shotId)+'_shot_boundary.png')
+        plt.savefig(filename,bbox_inches='tight')
+        plt.close()
+
+        return True
+
     def performShotBoundaryRoutine(self):
+
+        self.saveShotBoundaryOpticalFlows()
 
         for i in range(0, self.indexToCheck + 1):
             self.listOfFramesForCurrentShot.append(self.listOfCurrentFrames.pop(0))
@@ -214,6 +269,8 @@ class VideoToShotConverter:
 
         if(os.path.exists(self.logFile)):
             os.remove(self.logFile)
+        if(os.path.exists(self.logFileShotBoundary)):
+            os.remove(self.logFileShotBoundary)
 
         self.listOfCurrentFrames = []
         self.listOfFramesForCurrentShot = []
@@ -407,7 +464,8 @@ class PlotOpticalFlow:
         vis = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         cv2.polylines(vis, lines, 0, (0, 255, 0))
         for (x1, y1), (x2, y2) in lines:
-            cv2.circle(vis, (x1, y1), 1, (0, 255, 0), -1)
+            radius = int(np.sqrt((x1-x2)**2+(y1-y2)**2))
+            cv2.circle(vis, (x1, y1), radius, (0, 255, 0), -1)
 
         return vis
 
@@ -415,15 +473,31 @@ class PlotOpticalFlow:
 
         h, w = flow.shape[:2]
         fx, fy = flow[:, :, 0], flow[:, :, 1]
-        ang = np.arctan2(fy, fx) + np.pi
-        v = np.sqrt(fx * fx + fy * fy)
+        v, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        ang += np.pi
         hsv = np.zeros((h, w, 3), np.uint8)
-        hsv[..., 0] = ang * (180 / np.pi / 2)
+        hsv[..., 0] = np.uint8(ang * (180 / np.pi / 2))
         hsv[..., 1] = 255
-        hsv[..., 2] = np.minimum(v * 4, 255)
-        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        hsv[..., 2] = np.uint8(np.minimum(v * 4, 255))
+        rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
-        return bgr
+        return rgb
+
+    def plotFlowHist(self,flow,axes):
+
+        h,w = flow.shape[:2]
+        fx,fy = flow[:,:,0], flow[:,:,1]
+        fx = fx/h
+        fy = fy/w
+
+        mag_flow = np.sqrt(fx*fx + fy*fy)/np.sqrt(2.0)
+
+        bins = np.linspace(0.0,1.0,101)
+
+        axes.hist(x=mag_flow.flatten(),bins=bins)
+        axes.set_xticks(ticks=np.linspace(0.0,1.0,11))
+
+        return True
 
 
 class PlotOpticalFlowSamplingWindow:

@@ -1,3 +1,5 @@
+import matplotlib as mpl
+mpl.use('Agg')
 import os
 from shot_segmentor_pkg.Shotify import VideoToShotConverter,PlotShotSegmentationParams
 from sys import argv
