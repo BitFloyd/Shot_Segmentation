@@ -33,7 +33,7 @@ class VideoToShotConverter:
 
         self.videoFrameWidth = int(self.videoContainer.get(3))
         self.videoFrameHeight = int(self.videoContainer.get(4))
-        self.videoFPSRatioForWindow = 1.0
+        self.videoFPSRatioForWindow = 0.5
 
         if(slidingWindowLength==None):
             if(int(self.videoFPS*self.videoFPSRatioForWindow)%2==0):
@@ -55,10 +55,10 @@ class VideoToShotConverter:
         self.shotId = 0
         self.logFile = os.path.join(self.pathToAnalysis,'logfile.txt')
         self.logFileShotBoundary = os.path.join(self.pathToAnalysis,'shotBoundarylog.txt')
-        self.stdMultiplierForCheck = 3.5
+        self.stdMultiplierForCheck = 3.0
 
-        self.farnBackParams = {'flow':None, 'pyr_scale':0.75, 'levels':5, 'winsize':15,'iterations':3, 'poly_n':7, 'poly_sigma':1.2,'flags': 0}
-        self.frameResizeParams ={'fx':1.0,'fy':1.0}
+        self.farnBackParams = {'flow':None, 'pyr_scale':0.75, 'levels':7, 'winsize':15,'iterations':3, 'poly_n':7, 'poly_sigma':1.2,'flags': 0}
+        self.frameResizeParams ={'fx':0.25,'fy':0.25}
 
         self.ofplotter = PlotOpticalFlow()
 
@@ -98,9 +98,10 @@ class VideoToShotConverter:
         difference = np.abs(arrayOpticalFlowMagnitudes[self.indexToCheck]-medianOpticalFlow)
         threshold = self.stdMultiplierForCheck*stdOpticalFlow
 
-        if(np.sum(arrayOpticalFlowMagnitudes)>0 and arrayOpticalFlowMagnitudes[self.indexToCheck]>0):
+        conditionToCheckDifference = np.sum(arrayOpticalFlowMagnitudes)>0 and arrayOpticalFlowMagnitudes[self.indexToCheck]>0.02
 
-            if(difference>=threshold and threshold>=1.0):
+        if(conditionToCheckDifference):
+            if(difference>threshold):
                 self.writeShotBoundaryDetailsToFile(arrayOpticalFlowMagnitudes,medianOpticalFlow,stdOpticalFlow,difference)
                 return True
             else:
@@ -167,8 +168,8 @@ class VideoToShotConverter:
         f1 = cv2.resize(f1, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
         f2 = cv2.resize(f2, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
 
-        f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
-        f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+        # f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+        # f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
 
         return f1,f2
 
@@ -203,6 +204,26 @@ class VideoToShotConverter:
 
         return True
 
+    def drawMatches(self,f1,f2):
+
+        orb = cv2.ORB_create()
+        kp1, des1 = orb.detectAndCompute(f1,None)
+        kp2, des2 = orb.detectAndCompute(f2,None)
+
+        bf = cv2.BFMatcher()
+        matches = bf.knnMatch(des1, des2, k=2)
+
+        # Apply ratio test
+        good_matches = []
+        for m, n in matches:
+            if m.distance < 0.75 * n.distance:
+                good_matches.append([m])
+
+        # cv2.drawMatchesKnn expects list of lists as matches.
+        matched_img = cv2.drawMatchesKnn(f1, kp1, f2, kp2, good_matches, flags=2,outImg=None)
+
+        return good_matches, matched_img
+
     def saveShotBoundaryOpticalFlows(self):
 
         fig, axes = plt.subplots(3, 2)
@@ -224,6 +245,16 @@ class VideoToShotConverter:
         axes[1, 1].axis('off')
 
         self.ofplotter.plotFlowHist(flow,axes[2,0])
+
+        f1 = self.listOfCurrentFrames[int(0.35*len(self.listOfCurrentFrames))]
+        f2 = self.listOfCurrentFrames[int(0.65*len(self.listOfCurrentFrames))]
+
+        f1, f2 = self.prepFramesForOpticalFlows(f1,f2)
+
+        good_matches, matched_img = self.drawMatches(f1,f2)
+        axes[2,1].imshow(matched_img)
+        axes[2,1].set_title('Number_Matches:'+str(len(good_matches)))
+        axes[2,1].axis('off')
 
         filename = os.path.join(self.pathToShotBoundaries,str(self.shotId)+'_shot_boundary.png')
         plt.savefig(filename,bbox_inches='tight')
