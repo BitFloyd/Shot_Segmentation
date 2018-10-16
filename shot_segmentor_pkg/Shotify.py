@@ -4,6 +4,8 @@ from logging_pkg.logging import message_print, debug_print
 import os
 import math
 import matplotlib.pyplot as plt
+from skimage.measure import compare_ssim
+
 
 
 class VideoLengthAssertionError(Exception):
@@ -33,7 +35,7 @@ class VideoToShotConverter:
 
         self.videoFrameWidth = int(self.videoContainer.get(3))
         self.videoFrameHeight = int(self.videoContainer.get(4))
-        self.videoFPSRatioForWindow = 0.5
+        self.videoFPSRatioForWindow = 1.0
 
         if(slidingWindowLength==None):
             if(int(self.videoFPS*self.videoFPSRatioForWindow)%2==0):
@@ -55,7 +57,7 @@ class VideoToShotConverter:
         self.shotId = 0
         self.logFile = os.path.join(self.pathToAnalysis,'logfile.txt')
         self.logFileShotBoundary = os.path.join(self.pathToAnalysis,'shotBoundarylog.txt')
-        self.stdMultiplierForCheck = 3.0
+        self.stdMultiplierForCheck = 2.0
 
         self.farnBackParams = {'flow':None, 'pyr_scale':0.75, 'levels':7, 'winsize':15,'iterations':3, 'poly_n':7, 'poly_sigma':1.2,'flags': 0}
         self.frameResizeParams ={'fx':0.25,'fy':0.25}
@@ -98,16 +100,37 @@ class VideoToShotConverter:
         difference = np.abs(arrayOpticalFlowMagnitudes[self.indexToCheck]-medianOpticalFlow)
         threshold = self.stdMultiplierForCheck*stdOpticalFlow
 
-        conditionToCheckDifference = np.sum(arrayOpticalFlowMagnitudes)>0 and arrayOpticalFlowMagnitudes[self.indexToCheck]>0.02
+        boundaryCondition = self.checkBoundaryCondition(arrayOpticalFlowMagnitudes,difference,threshold)
 
-        if(conditionToCheckDifference):
-            if(difference>threshold):
-                self.writeShotBoundaryDetailsToFile(arrayOpticalFlowMagnitudes,medianOpticalFlow,stdOpticalFlow,difference)
-                return True
-            else:
-                return False
+        if(boundaryCondition):
+            self.writeShotBoundaryDetailsToFile(arrayOpticalFlowMagnitudes,medianOpticalFlow,stdOpticalFlow,difference)
+            return True
         else:
             return False
+
+    def checkBoundaryCondition(self,arrayOpticalFlowMagnitudes,difference,threshold):
+
+        flowExists = np.sum(arrayOpticalFlowMagnitudes) > 0
+        considerableFlow = arrayOpticalFlowMagnitudes[self.indexToCheck] > 0.02
+        differenceGTThreshold = difference>threshold
+
+        matchRatioCondition = False
+        checkMatchRatioCondition = flowExists and considerableFlow and differenceGTThreshold
+
+        if(checkMatchRatioCondition):
+            matchRatioCondition = self.getMatchRatioFromListOfCurrentFrames() < 0.02
+
+        checkSDIM = checkMatchRatioCondition and matchRatioCondition
+
+        sdimCondition = False
+        if(checkSDIM):
+            images_SDIM = self.getSDIMFromListOfCurrentFrames()
+            if(images_SDIM>0.70):
+                sdimCondition = True
+
+        finalCondition=checkSDIM and sdimCondition
+
+        return finalCondition
 
     def saveShotFromFramesForCurrentShot(self):
 
@@ -173,6 +196,19 @@ class VideoToShotConverter:
 
         return f1,f2
 
+    def prepFramesForMatchCheck(self,f1,f2):
+
+        f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
+        f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
+
+        f1 = cv2.resize(f1, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
+        f2 = cv2.resize(f2, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
+
+        f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+        f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+
+        return f1,f2
+
     def getOpticalFlow(self,f1,f2):
 
         f1,f2 = self.prepFramesForOpticalFlows(f1,f2)
@@ -204,25 +240,102 @@ class VideoToShotConverter:
 
         return True
 
-    def drawMatches(self,f1,f2):
+    def getKeyPointDetector(self):
 
-        orb = cv2.ORB_create()
-        kp1, des1 = orb.detectAndCompute(f1,None)
-        kp2, des2 = orb.detectAndCompute(f2,None)
+        keypointDetector = cv2.ORB_create()
+
+        return keypointDetector
+
+    def getImagesPrePostBoundaryCandidate(self):
+
+        f1 = self.listOfCurrentFrames[int(0.45 * len(self.listOfCurrentFrames))]
+        f2 = self.listOfCurrentFrames[int(0.55 * len(self.listOfCurrentFrames))]
+
+        return f1,f2
+
+    def getSDIM(self,f1,f2):
+
+        images_SDIM = 1 - compare_ssim(f1, f2, win_size=3*self.farnBackParams['winsize'])
+
+        return images_SDIM
+
+    def getSDIMFromListOfCurrentFrames(self):
+
+        f1, f2 = self.getImagesPrePostBoundaryCandidate()
+        f1, f2 = self.prepFramesForMatchCheck(f1,f2)
+
+        images_SDIM = self.getSDIM(f1,f2)
+
+        return images_SDIM
+
+    def getMatchRatioFromListOfCurrentFrames(self):
+
+        f1,f2 = self.getImagesPrePostBoundaryCandidate()
+
+        f1, f2 = self.prepFramesForMatchCheck(f1, f2)
+
+        matchRatio = self.getMatchRatio(f1,f2)
+
+        return matchRatio
+
+    def getMatchRatio(self,f1,f2):
+
+        keypointDetector = self.getKeyPointDetector()
+        kp1, des1 = keypointDetector.detectAndCompute(f1, None)
+        kp2, des2 = keypointDetector.detectAndCompute(f2, None)
 
         bf = cv2.BFMatcher()
         matches = bf.knnMatch(des1, des2, k=2)
 
         # Apply ratio test
         good_matches = []
+        image_diagonal = math.sqrt(f1.shape[0] ** 2 + f1.shape[1] ** 2)
+
         for m, n in matches:
             if m.distance < 0.75 * n.distance:
-                good_matches.append([m])
+                x1, y1 = kp1[m.queryIdx].pt
+                x2, y2 = kp2[m.trainIdx].pt
+                pt1 = np.array([x1, y1])
+                pt2 = np.array([x2, y2])
+                distance = np.linalg.norm(pt1 - pt2)
+                if (distance < 0.1 * image_diagonal):
+                    good_matches.append([m])
+
+        matches_ratio = (2.0 * len(good_matches)) / (len(kp1) + len(kp2))
+
+        return matches_ratio
+
+    def drawMatches(self,f1,f2):
+
+        keypointDetector = self.getKeyPointDetector()
+        kp1, des1 = keypointDetector.detectAndCompute(f1,None)
+        kp2, des2 = keypointDetector.detectAndCompute(f2,None)
+
+        bf = cv2.BFMatcher()
+        matches = bf.knnMatch(des1, des2, k=2)
+
+        # Apply ratio test
+        good_matches = []
+        image_diagonal = math.sqrt(f1.shape[0]**2 + f1.shape[1]**2)
+
+        for m, n in matches:
+            if m.distance < 0.75 * n.distance:
+                x1, y1 = kp1[m.queryIdx].pt
+                x2, y2 = kp2[m.trainIdx].pt
+                pt1 = np.array([x1, y1])
+                pt2 = np.array([x2, y2])
+                distance = np.linalg.norm(pt1 - pt2)
+                if (distance < 0.1 * image_diagonal):
+                    good_matches.append([m])
 
         # cv2.drawMatchesKnn expects list of lists as matches.
         matched_img = cv2.drawMatchesKnn(f1, kp1, f2, kp2, good_matches, flags=2,outImg=None)
 
-        return good_matches, matched_img
+        matches_ratio = (2.0*len(good_matches))/(len(kp1)+len(kp2))
+
+        matches_ratioString = str("%.2f" % round(matches_ratio,2))
+
+        return matches_ratioString, matched_img
 
     def saveShotBoundaryOpticalFlows(self):
 
@@ -246,15 +359,19 @@ class VideoToShotConverter:
 
         self.ofplotter.plotFlowHist(flow,axes[2,0])
 
-        f1 = self.listOfCurrentFrames[int(0.35*len(self.listOfCurrentFrames))]
-        f2 = self.listOfCurrentFrames[int(0.65*len(self.listOfCurrentFrames))]
+        f1, f2 = self.getImagesPrePostBoundaryCandidate()
 
-        f1, f2 = self.prepFramesForOpticalFlows(f1,f2)
+        f1, f2 = self.prepFramesForMatchCheck(f1,f2)
 
-        good_matches, matched_img = self.drawMatches(f1,f2)
+        matches_ratioString, matched_img = self.drawMatches(f1,f2)
         axes[2,1].imshow(matched_img)
-        axes[2,1].set_title('Number_Matches:'+str(len(good_matches)))
+        axes[2,1].set_title('Ratio_Matches:'+matches_ratioString)
         axes[2,1].axis('off')
+
+        images_SDIM = self.getSDIM(f1,f2)
+
+        axes[2, 0].set_title('Images_SDIM:' + str("%.2f" % round(images_SDIM, 2)))
+
 
         filename = os.path.join(self.pathToShotBoundaries,str(self.shotId)+'_shot_boundary.png')
         plt.savefig(filename,bbox_inches='tight')
@@ -325,6 +442,9 @@ class VideoToShotConverter:
             print str(i)+'/'+str(self.numFrames)
             i+=1
 
+
+        message_print("TOTAL NUMBER OF SHOTS DETECTED:"+str(self.shotId))
+
         return True
 
     def plotOpticalFlowSamplingWindow(self):
@@ -336,7 +456,6 @@ class VideoToShotConverter:
 
     def __del__(self):
         self.videoContainer.release()
-
 
 class PlotShotSegmentationParams:
 
@@ -479,7 +598,6 @@ class PlotShotSegmentationParams:
 
         return True
 
-
 class PlotOpticalFlow:
 
     def __init__(self):
@@ -529,7 +647,6 @@ class PlotOpticalFlow:
         axes.set_xticks(ticks=np.linspace(0.0,1.0,11))
 
         return True
-
 
 class PlotOpticalFlowSamplingWindow:
 
