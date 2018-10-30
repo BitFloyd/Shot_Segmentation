@@ -11,13 +11,13 @@ parse_dict = af.parse_arguments(parameters)
 
 pathToVideo = parse_dict['video']
 pathToShots = parse_dict['target_folder']
+debug = parse_dict['debug']
 
-vtsc = VideoToShotConverter(pathToVideo,pathToShots,slidingWindowLength=None)
+vtsc = VideoToShotConverter(pathToVideo,pathToShots,slidingWindowLength=None,debug_mode=debug)
 
-vtsc.plotOpticalFlowSamplingWindow()
 vtsc.segmentVideoToShots()
 
-plotter = PlotShotSegmentationParams(vtsc)
-plotter.plotOF()
-plotter.plotSlopes()
-plotter.plotRatios()
+# plotter = PlotShotSegmentationParams(vtsc)
+# plotter.plotOF()
+# plotter.plotSlopes()
+# plotter.plotRatios()

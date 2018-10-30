@@ -46,4 +46,12 @@ def parse_arguments(args):
     else:
         raise TargetFolderNotPassed("Target Folder must be passed with a -t")
 
+    if ('-debug' in args.keys()):
+        debug = bool(args['-debug'])
+        parse_dict['debug'] = debug
+
+    else:
+        parse_dict['debug'] = False
+
+
     return parse_dict

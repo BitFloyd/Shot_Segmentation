@@ -16,17 +16,22 @@ class SlidingWindowLengthEvenError(Exception):
 
 class VideoToShotConverter:
 
-    def __init__(self,pathToVideo,pathToShots,slidingWindowLength=None):
+    def __init__(self,pathToVideo,pathToShots,slidingWindowLength=None,debug_mode=False):
 
         self.pathToVideo = pathToVideo
         self.pathToShots = pathToShots
         self.pathToAnalysis = os.path.join(pathToShots,'Analysis')
-        self.pathToShotBoundaries = os.path.join(pathToShots,'ShotBoundaries')
+        self.pathToShotBoundaryOFlows = os.path.join(pathToShots,'ShotBoundaryOFlows')
+        self.pathToShotBoundaryImages = os.path.join(pathToShots,'ShotBoundaryImages')
+
+        self.debug_mode = debug_mode
 
         if(not os.path.exists(self.pathToAnalysis)):
             os.mkdir(self.pathToAnalysis)
-        if (not os.path.exists(self.pathToShotBoundaries)):
-            os.mkdir(self.pathToShotBoundaries)
+        if (not os.path.exists(self.pathToShotBoundaryOFlows)):
+            os.mkdir(self.pathToShotBoundaryOFlows)
+        if (not os.path.exists(self.pathToShotBoundaryImages)):
+            os.mkdir(self.pathToShotBoundaryImages)
 
         self.videoContainer = cv2.VideoCapture(self.pathToVideo)
         self.videoFPS = int(self.videoContainer.get(cv2.CAP_PROP_FPS))
@@ -64,10 +69,12 @@ class VideoToShotConverter:
 
         self.ofplotter = PlotOpticalFlow()
 
-    def writeOpticalFlowDetailsToFile(self,flow):
+    def writeContinuityValuesToFile(self,flow,matchRatio,SDIM):
 
         with open(self.logFile,'a+') as f:
-            f.write(str(flow)+'\n')
+            f.write("Flow:"+str(flow)+" ")
+            f.write("MatchRatio:"+str(matchRatio)+" ")
+            f.write("SDIM:"+str(SDIM)+'\n')
 
         return True
 
@@ -209,6 +216,19 @@ class VideoToShotConverter:
 
         return f1,f2
 
+    def prepFramesForSDIMCheck(self,f1,f2):
+
+        f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
+        f2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
+
+        f1 = cv2.resize(f1, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
+        f2 = cv2.resize(f2, (0,0), fx=self.frameResizeParams['fx'], fy=self.frameResizeParams['fy'])
+
+        f1 = cv2.GaussianBlur(f1,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+        f2 = cv2.GaussianBlur(f2,ksize=(5,5),sigmaX=1.0,sigmaY=0)
+
+        return f1,f2
+
     def getOpticalFlow(self,f1,f2):
 
         f1,f2 = self.prepFramesForOpticalFlows(f1,f2)
@@ -228,7 +248,11 @@ class VideoToShotConverter:
             mag = self.getOpticalFlow(self.listOfCurrentFrames[i],self.listOfCurrentFrames[i + 1])
 
             self.listOpticalFlowMagnitudes.append(mag)
-            self.writeOpticalFlowDetailsToFile(mag)
+
+            if(self.debug_mode):
+
+                matchRatio,SDIM = self.debugGenerateContinuityValues(self.listOfCurrentFrames[i],self.listOfCurrentFrames[i + 1])
+                self.writeContinuityValuesToFile(mag, matchRatio, SDIM)
 
     def updateOpticalFlows(self):
 
@@ -236,9 +260,23 @@ class VideoToShotConverter:
 
         mag = self.getOpticalFlow(self.listOfCurrentFrames[-2],self.listOfCurrentFrames[-1])
         self.listOpticalFlowMagnitudes.append(mag)
-        self.writeOpticalFlowDetailsToFile(mag)
+
+        if(self.debug_mode):
+            matchRatio, SDIM = self.debugGenerateContinuityValues(self.listOfCurrentFrames[-2],self.listOfCurrentFrames[-1])
+            self.writeContinuityValuesToFile(mag,matchRatio,SDIM)
 
         return True
+
+    def debugGenerateContinuityValues(self,f1,f2):
+
+        f1Orig, f2Orig = np.copy(f1),np.copy(f2)
+        f1, f2 = self.prepFramesForMatchCheck(f1Orig, f2Orig)
+        matchRatio = self.getMatchRatio(f1, f2)
+
+        f1, f2 = self.prepFramesForSDIMCheck(f1Orig, f2Orig)
+        SDIM = self.getSDIM(f1, f2)
+
+        return matchRatio,SDIM
 
     def getKeyPointDetector(self):
 
@@ -262,7 +300,7 @@ class VideoToShotConverter:
     def getSDIMFromListOfCurrentFrames(self):
 
         f1, f2 = self.getImagesPrePostBoundaryCandidate()
-        f1, f2 = self.prepFramesForMatchCheck(f1,f2)
+        f1, f2 = self.prepFramesForSDIMCheck(f1,f2)
 
         images_SDIM = self.getSDIM(f1,f2)
 
@@ -368,20 +406,40 @@ class VideoToShotConverter:
         axes[2,1].set_title('Ratio_Matches:'+matches_ratioString)
         axes[2,1].axis('off')
 
-        images_SDIM = self.getSDIM(f1,f2)
+        images_SDIM = self.getSDIMFromListOfCurrentFrames()
 
         axes[2, 0].set_title('Images_SDIM:' + str("%.2f" % round(images_SDIM, 2)))
 
 
-        filename = os.path.join(self.pathToShotBoundaries,str(self.shotId)+'_shot_boundary.png')
+        filename = os.path.join(self.pathToShotBoundaryOFlows,str(self.shotId)+'_shot_boundary.png')
         plt.savefig(filename,bbox_inches='tight')
         plt.close()
 
         return True
 
+    def saveShotBoundaryImages(self):
+
+        one_dim = int(math.sqrt(self.slidingWindowLength))
+
+        if(one_dim%2==0):
+            one_dim-=1
+
+        fig, axes = plt.subplots(one_dim,one_dim)
+        plt.axis('off')
+
+        for idx,i in enumerate(range(self.indexToCheck-(one_dim**2)/2,self.indexToCheck+(one_dim**2)/2+1)):
+            ax = axes[idx/one_dim][idx%one_dim]
+            ax.imshow(cv2.cvtColor(self.listOfCurrentFrames[i],cv2.COLOR_BGR2RGB))
+            ax.axis('off')
+
+        filename = os.path.join(self.pathToShotBoundaryImages,str(self.shotId)+'_shot_boundary.png')
+        plt.savefig(filename,bbox_inches='tight')
+        plt.close()
+
     def performShotBoundaryRoutine(self):
 
         self.saveShotBoundaryOpticalFlows()
+        self.saveShotBoundaryImages()
 
         for i in range(0, self.indexToCheck + 1):
             self.listOfFramesForCurrentShot.append(self.listOfCurrentFrames.pop(0))
@@ -442,6 +500,9 @@ class VideoToShotConverter:
             print str(i)+'/'+str(self.numFrames)
             i+=1
 
+
+        if(self.shotId==0):
+            self.saveShotFromFramesForCurrentShot()
 
         message_print("TOTAL NUMBER OF SHOTS DETECTED:"+str(self.shotId))
 
